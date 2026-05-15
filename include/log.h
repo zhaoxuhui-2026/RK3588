@@ -1,0 +1,49 @@
+#ifndef LOG_H
+#define LOG_H
+
+#include <stdio.h>
+#include <stdint.h>
+
+#define LOG_LEVEL_DEBUG 0
+#define LOG_LEVEL_INFO  1
+#define LOG_LEVEL_WARN  2
+#define LOG_LEVEL_ERROR 3
+#define LOG_MODULE  "rk3588"
+
+/* 初始化日志文件 */
+int log_init(const char *filename);
+int log_init_auto(void);
+
+/* 设置最低输出等级 */
+void log_set_level(int level);
+
+/* 日志接口 */
+void log_printf(int level, const char *module,
+                 const char *fmt, ...);
+                 
+/* ASCII日志 */
+// void hex_ascii_dump(const char *prefix,
+//                     const unsigned char *buf,
+//                     int len)
+
+/* 串口打印：
+    字符串 
+    HEX 
+    ASCII */
+void serial_hexdump(const char *prefix,
+                    uint8_t *buf, int len);
+
+/* 快捷宏 */
+#define LOGD(module, ...) \
+    log_printf(LOG_LEVEL_DEBUG, __FUNCTION__, __VA_ARGS__)
+
+#define LOGI(module, ...) \
+    log_printf(LOG_LEVEL_INFO,  __FUNCTION__, __VA_ARGS__)
+
+#define LOGW(module, ...) \
+    log_printf(LOG_LEVEL_WARN,  __FUNCTION__, __VA_ARGS__)
+
+#define LOGE(module, ...) \
+    log_printf(LOG_LEVEL_ERROR, __FUNCTION__, __VA_ARGS__)
+
+#endif

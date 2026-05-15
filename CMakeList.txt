@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.10)
+project(rk3588)
+
+set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+
+include_directories(
+    .
+    mqtt/paho_embedded/client
+    mqtt/paho_embedded/packet
+)
+
+add_executable(rk3588
+    main.c
+    serial_port.c
+    chassis_protocol.c
+    mqtt/paho_embedded/client/MQTTClient.c
+    mqtt/paho_embedded/packet/MQTTPacket.c
+)
+
+target_link_libraries(rk3588 pthread)
