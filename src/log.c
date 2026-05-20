@@ -5,6 +5,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <dirent.h>
+#include <stdlib.h>
+#include <limits.h>
+#include <unistd.h>
 
 #define LOG_DIR           "./"
 #define LOG_PREFIX        "rk3588_"
@@ -13,7 +17,8 @@
 
 static FILE *log_fp = NULL;
 static int   log_level = LOG_LEVEL_INFO;
-static long log_cur_size = 0;
+static int log_file_num = 0;
+// static long log_cur_size = 0;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static const char *level_str[] = {
@@ -116,6 +121,8 @@ void log_printf(int level, const char *module,
         fflush(log_fp);
         va_end(args);
     }
+    
+    log_check_file_if_oversize();
 
     pthread_mutex_unlock(&log_mutex);
 }
@@ -143,7 +150,7 @@ int log_init_auto(void)
         return -1;
     }
 
-    log_cur_size = 0;
+    // log_cur_size = 0;
     return 0;
 }
 
@@ -162,7 +169,97 @@ void log_close(void)
         fclose(log_fp);
         log_fp = NULL;
     }
-    log_cur_size = 0;
+    // log_cur_size = 0;
+}
+
+long long extract_timestamp(const char *name)
+{
+    const char *p = strstr(name, "rk3588_");
+    if (!p) return 0;
+
+    p += strlen("rk3588_");
+
+    char buf[16] = {0};
+    strncpy(buf, p, 15);  // YYYYMMDD_HHMMSS
+
+    /* 去掉下划线 */
+    for (int i = 0; buf[i]; i++) {
+        if (buf[i] == '_')
+            buf[i] = '\0';
+    }
+
+    return atoll(buf);  // 20260115103812
+}
+
+void log_remove_oldest_by_name(void)
+{
+    DIR *dir = opendir(LOG_DIR);
+    if (!dir) return;
+
+    struct dirent *entry;
+    char oldest_name[256] = {0};
+    long long oldest_ts = LLONG_MAX;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, LOG_PREFIX, strlen(LOG_PREFIX)))
+            continue;
+
+        long long ts = extract_timestamp(entry->d_name);
+        if (ts == 0) continue;
+
+        if (ts < oldest_ts) {
+            oldest_ts = ts;
+            strcpy(oldest_name, entry->d_name);
+        }
+        fprintf(log_fp, "log_remove_oldest_by_name entry->d_name = %s\n", entry->d_name);
+    }
+    closedir(dir);
+
+    if (oldest_name[0]) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s", LOG_DIR, oldest_name);
+        fprintf(log_fp, "log_remove_oldest_by_name path = %s, oldest_name = %s\n", path, oldest_name);
+        unlink(path);
+    }
+}
+
+long log_check_file_if_oversize(void)
+{
+    long log_size = file_size(log_fp);
+
+    if(log_size > LOG_MAX_SIZE)
+    {
+        log_close();
+        log_init_auto();
+
+        DIR *dir = opendir(LOG_DIR);
+        if (!dir) return 0;
+        struct dirent *entry;
+        int file_num = 0;
+
+        while ((entry = readdir(dir)) != NULL) {
+            if (strncmp(entry->d_name, LOG_PREFIX, strlen(LOG_PREFIX))) {
+                continue;
+            }
+            file_num++;
+        }
+
+        while (1) {
+            if (file_num > LOG_MAX_FILES)
+            {
+                log_remove_oldest_by_name();
+                file_num--;
+                log_file_num = file_num;
+                fprintf(log_fp, "log_file_num = %d\n", log_file_num);
+            }
+            else
+            {
+                break;
+            }
+        }
+    }
+
+    return log_size;
 }
 
 void serial_hexdump(const char *prefix, uint8_t *buf, int len)
@@ -238,6 +335,7 @@ void serial_hexdump(const char *prefix, uint8_t *buf, int len)
         }
 
         fflush(log_fp);
+        log_check_file_if_oversize();
     }
 
     pthread_mutex_unlock(&log_mutex);

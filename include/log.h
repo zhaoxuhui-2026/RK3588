@@ -17,6 +17,12 @@ int log_init_auto(void);
 /* 计算日志文件大小 */
 long file_size(FILE *fp);
 
+long long extract_timestamp(const char *name);
+
+void log_remove_oldest_by_name(void);
+
+long log_check_file_if_oversize(void);
+
 /* 关闭日志写入 */
 void log_close(void);
 
