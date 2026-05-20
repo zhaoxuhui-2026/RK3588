@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include "serial_port.h"
+#include "serial_parse.h"
 #include "chassis_protocol.h"
 #include "log.h"
 #include <pthread.h>
@@ -30,6 +31,7 @@
 /* RS232 */
 #define RS232_HOSTNAME_REQ  "hostname:get"
 #define RS232_UPDATE_DYNAMIC_REQ  "update_dynamic"
+#define CHASSIS_NAV_RESULT_RSP  "nav_result"
 
 #define PUBLISH_MESSAGE  "Hello from RK3588!"
 #define KEEP_ALIVE_INTERVAL_MS 5000   // 5 秒
@@ -37,13 +39,14 @@
 static Network network;
 static MQTTClient mqtt_client;
 
-static pthread_t reconnect_tid;
-static pthread_t keepalive_tid;
 static int keepalive_running = 0;
+
+serial_t chassis_serial, rk3128_serial;
 
 int sensor_value = 0;
 int val_value[2] = {0};
 char sys_hostname[64] = {0};
+bool is_nav_result = false;
 
 void mqtt_message_arrived(MessageData *md)
 {
@@ -55,147 +58,43 @@ void mqtt_message_arrived(MessageData *md)
     // chassis_control(cmd);
 }
 
-/* 构造协议帧 */
-int build_frame(const char *hostname, uint8_t *frame, int max_len)
+int parse_serial_frame(const char *buf)
 {
-    char data[128];
-    int data_len;
-
-    /* 数据段 D */
-    data_len = snprintf(data, sizeof(data), "%s", hostname);
-    if (data_len <= 0 || data_len >= max_len)
-        return -1;
-
-    /* 帧头 H + 长度 L + 数据 D */
-    int index = 0;
-
-    frame[index++] = 0xAA;
-    frame[index++] = 0x54;
-    frame[index++] = (char)data_len;
-
-    memcpy(&frame[index], data, data_len);
-    index += data_len;
-
-    /* 校验位 S */
-    char checksum = (char)data_len;
-    for (int i = 0; i < data_len; i++) {
-        checksum ^= data[i];
-    }
-    frame[index++] = checksum;
-
-    return index;
-}
-
-/*
- * 功能：
- *   从 buf 中解析 "sys:boot:" 后面的连续字母数字字符串
- * 参数：
- *   buf      : 输入字符串（串口/协议数据）
- *   out_str  : 输出字符串缓冲区
- *   max_len  : 输出缓冲区最大长度
- * 返回：
- *   成功返回 0，失败返回 -1
- */
-int parse_hostname_value(const char *buf, char *out_str)
-{
-    const char *prefix = "sys:boot:";
-    const char *pos;
-    int max_len = strlen(buf);
-
-    /* 1. 查找前缀 */
-    pos = strstr(buf, prefix);
-    if (pos == NULL) {
+    if (buf == NULL)
+    {
+        LOGE(LOG_MODULE, "parse serial recive null data!\n");
         return -1;
     }
 
-    /* 2. 跳过前缀，指向数据区 */
-    pos += strlen(prefix);
+    char serial_buf[1024] = {0};
+    int cmd_type = 0;
+    memcpy(serial_buf, buf, 1024);
 
-    /* 3. 读取连续的 [0-9 A-Z a-z] */
-    int i = 0;
-    while (*pos &&
-           i < max_len - 1 &&
-           (isalnum((unsigned char)*pos))) {
-        out_str[i++] = *pos++;
+    cmd_type = parse_serial_cmd(serial_buf);
+    LOGI(LOG_MODULE, "[SERIAL] cmd_type = %d\n", cmd_type);
+    switch (cmd_type)
+    {
+        case CMD_NAV_RESULT:
+            if (parse_nav_result_value(serial_buf, &is_nav_result)) {
+                LOGI("main", "[SERIAL] nav_result = %d\n", is_nav_result);
+            }
+            break;
+        case CMD_SYS_BOOT:
+            if (parse_hostname_value(serial_buf, sys_hostname)) {
+                LOGI("main", "[SERIAL] hostname = %d\n", sys_hostname);
+            }
+            break;
+        case CMD_BASE_VEL:
+            if (parse_base_val_value(serial_buf, val_value) == 0) {
+                LOGI("main", "[SERIAL] base_val line_speed = %d, angular_speed = %d\n", val_value[0], val_value[1]);
+            }
+            break;
+        case CMD_CHECK_SENSOR:
+            if (parse_check_sensors_value(serial_buf, &sensor_value) == 0) {
+                LOGI("main", "[SERIAL] check_sensors 4th value = %d\n", sensor_value);
+            }
+            break;
     }
-
-    /* 4. 字符串结束符 */
-    out_str[i] = '\0';
-
-    /* 5. 判断是否解析到有效内容 */
-    if (i == 0) {
-        return -1;
-    }
-
-    return 0;
-}
-
-/*
- * @brief 从 base_val{...} 中获取传感器值
- * @param buf 串口接收到的字符串
- * @param out_value 解析值
- * @return 0 成功，-1 失败
- */
-int parse_base_val_value(const char *buf, int *out_value)
-{
-    const char *prefix = "base_vel[";
-    const char *pos;
-
-    /* 1. 查找前缀 */
-    pos = strstr(buf, prefix);
-    if (pos == NULL) {
-        return -1;
-    }
-
-    /* 2. 跳过前缀，指向数据区 */
-    pos += strlen(prefix);
-
-    /* 3. 按空格解析第 4 个值 */
-    int val1, val2;
-    int parsed = sscanf(pos, "%d %d",
-                        &val1, &val2);
-
-    if (parsed < 2) {
-        LOGI(LOG_MODULE, "[PARSE] base_val format error\n");
-        return -1;
-    }
-
-    out_value[0] = val1;
-    out_value[1] = val2;
-    return 0;
-}
-
-/*
- * @brief 从 check_sensors{...} 中获取第 4 个传感器值
- * @param buf 串口接收到的字符串
- * @param out_value 解析出的第 4 个值
- * @return 0 成功，-1 失败
- */
-int parse_check_sensors_value(const char *buf, int *out_value)
-{
-    const char *prefix = "check_sensors{";
-    const char *pos;
-
-    /* 1. 查找前缀 */
-    pos = strstr(buf, prefix);
-    if (pos == NULL) {
-        return -1;
-    }
-
-    /* 2. 跳过前缀，指向数据区 */
-    pos += strlen(prefix);
-
-    /* 3. 按空格解析第 4 个值 */
-    int val1, val2, val3, val4;
-    int parsed = sscanf(pos, "%d %d %d %d",
-                        &val1, &val2, &val3, &val4);
-
-    if (parsed < 4) {
-        LOGE(LOG_MODULE, "[PARSE] check_sensors format error\n");
-        return -1;
-    }
-
-    *out_value = val4;
     return 0;
 }
 
@@ -259,21 +158,21 @@ void *serial_keepalive_thread(void *arg)
         memset(frame, 0x00, 128);
 
         // 获取导航动态参数
-        len = build_frame(RS232_UPDATE_DYNAMIC_REQ, frame, sizeof(frame));
-        if (len > 0) 
-        {
-            ret = serial_write(ser_232_2, frame, len);
-            if (ret > 0)
-            {
-                LOGI(LOG_MODULE, "update_dynamic = %s, ret = %d\n", RS232_UPDATE_DYNAMIC_REQ, ret);
-            }
-            else
-            {
-                LOGE(LOG_MODULE, "send update_dynamic error!\n");
-            }
-        }
-        // serial_hexdump("[SERIAL TX]", frame, 128);
-        memset(frame, 0x00, 128);
+        // len = build_frame(RS232_UPDATE_DYNAMIC_REQ, frame, sizeof(frame));
+        // if (len > 0) 
+        // {
+        //     ret = serial_write(ser_232_2, frame, len);
+        //     if (ret > 0)
+        //     {
+        //         LOGI(LOG_MODULE, "update_dynamic = %s, ret = %d\n", RS232_UPDATE_DYNAMIC_REQ, ret);
+        //     }
+        //     else
+        //     {
+        //         LOGE(LOG_MODULE, "send update_dynamic error!\n");
+        //     }
+        // }
+        // // serial_hexdump("[SERIAL TX]", frame, 128);
+        // memset(frame, 0x00, 128);
 
         usleep(KEEP_ALIVE_INTERVAL_MS * 1000);
     }
@@ -310,6 +209,130 @@ void *mqtt_reconnect_thread(void *arg)
     }
 }
 
+void *nav_recv_thread(void *arg)
+{
+    char payload[1024];
+    uint8_t rk3128_rx_buf[1024] = {0};
+    struct timeval tv;
+    int read_ret, i, ret = 0;
+    int maxfd;
+    fd_set rfds;
+
+    while (1) {
+        FD_ZERO(&rfds);
+        FD_SET(rk3128_serial.fd, &rfds);
+
+        int maxfd = rk3128_serial.fd;
+
+        tv.tv_sec = 1;   // 1 秒超时
+        tv.tv_usec = 0;
+        
+        ret = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+        if (ret < 0) {
+            LOGE(LOG_MODULE, "select error\n");
+            usleep(100000);
+            continue;
+        }
+
+        if (FD_ISSET(rk3128_serial.fd, &rfds)) {
+            /* RS232_3 */
+            memset(rk3128_rx_buf, 0x00, 1024);
+            read_ret = serial_read(&rk3128_serial, rk3128_rx_buf, sizeof(rk3128_rx_buf));
+            if (read_ret > 0) {
+                // for (i = 0; i < read_ret; i++) {
+                //     if (chassis_parse(rk3128_rx_buf[i], &state)) {
+                //         snprintf(payload, sizeof(payload),
+                //                  "{\"vel\":%d,\"ang\":%d}",
+                //                  state.velocity,
+                //                  state.angular);
+                //     }
+                // }
+            
+                serial_hexdump("[RS232_3 To SERIAL RX]", rk3128_rx_buf, read_ret);
+            
+                /* Write Data to RS232_2 */
+                ret = serial_write(&chassis_serial, rk3128_rx_buf, read_ret);
+                if (ret > 0)
+                {
+                    LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", rk3128_rx_buf, ret);
+                }
+                else
+                {
+                    LOGE(LOG_MODULE, "send hostname error!\n");
+                }
+            }
+        }
+    }
+}
+
+void *chassic_recv_thread(void *arg)
+{
+    uint8_t chassis_rx_buf[1024] = {0};
+    struct timeval tv;
+    int i, ret, read_ret = 0;
+    int maxfd;
+    fd_set rfds;
+
+    while (1) {
+        FD_ZERO(&rfds);
+        FD_SET(chassis_serial.fd, &rfds);
+
+        int maxfd = chassis_serial.fd;
+
+        tv.tv_sec = 1;   // 1 秒超时
+        tv.tv_usec = 0;
+        
+        ret = select(maxfd + 1, &rfds, NULL, NULL, &tv);
+        if (ret < 0) {
+            LOGE(LOG_MODULE, "select error\n");
+            usleep(100000);
+            continue;
+        }
+
+        if (FD_ISSET(chassis_serial.fd, &rfds)) {
+            memset(chassis_rx_buf, 0x00, sizeof(chassis_rx_buf));
+            read_ret = serial_read(&chassis_serial, chassis_rx_buf, sizeof(chassis_rx_buf));
+            if (read_ret > 0) {
+                // for (i = 0; i < read_ret; i++) {
+                //     if (chassis_parse(chassis_rx_buf[i], &state)) {
+                //         snprintf(payload, sizeof(payload),
+                //                  "{\"vel\":%d,\"ang\":%d}",
+                //                  state.velocity,
+                //                  state.angular);
+
+                //         // MQTTPublish(&mqtt_client, TOPIC_STATUS, payload);
+                //         // printf("Vel=%d Ang=%d\n",
+                //         //        state.velocity, state.angular);
+                //     }
+                // }
+
+                // printf("chassis_rx_buf = %s\n", chassis_rx_buf + 2);
+                serial_hexdump("[SERIAL RX]", chassis_rx_buf, read_ret);
+
+                if (parse_serial_frame((char *)chassis_rx_buf) == 0)
+                {
+                    LOGI("main", "[SERIAL] prase serial value = %d\n", sensor_value);
+                }
+                else
+                {
+                    LOGE(LOG_MODULE, "parse data error!\n");
+                }
+
+                /* Write Data to RK3128 */
+                ret = serial_write(&rk3128_serial, chassis_rx_buf, read_ret);
+                if (ret > 0)
+                {
+                    LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", chassis_rx_buf, ret);
+                }
+                else
+                {
+                    LOGE(LOG_MODULE, "send hostname error!\n");
+                }
+            }
+        }
+    }
+}
+
 void *mqtt_publish_thread(void *arg)
 {
     (void)arg;
@@ -319,9 +342,10 @@ void *mqtt_publish_thread(void *arg)
     char robot_status[32];
     char robot_hostname[64];
     long long timestamp = 0;
+    long long last_timestamp = 0;
 
     while (1) {
-        if (MQTTIsConnected(&mqtt_client)) {
+        if (MQTTIsConnected(&mqtt_client) && is_nav_result == true) {
 
             timestamp = (long long)time(NULL) * 1000; // 当前时间戳（毫秒
 
@@ -354,7 +378,7 @@ void *mqtt_publish_thread(void *arg)
             // {
             //     sprintf(robot_status, "idle", strlen("idle"));
             // }
-            LOGI(LOG_MODULE, "sensor_value = %d, camera_status = %s, val_value[0] = %d, val_value[1] = %d, robot_status = %d\n",
+            LOGI(LOG_MODULE, "[MQTT] Send sensor_value = %d, camera_status = %s, val_value[0] = %d, val_value[1] = %d, robot_status = %d\n",
              sensor_value, camera_status, val_value[0], val_value[1], robot_status);
 
             snprintf(payload, sizeof(payload),
@@ -378,17 +402,21 @@ void *mqtt_publish_thread(void *arg)
             message.payloadlen = strlen(payload);
 
             LOGI(LOG_MODULE, "[MQTT] try publish message\n");
-            MQTTPublish(&mqtt_client, TOPIC, &message);
+            if (timestamp - last_timestamp > 1000 * 5) {
+                MQTTPublish(&mqtt_client, TOPIC, &message);
+            }
+            last_timestamp = timestamp;
+            is_nav_result = false;
         }
-        sleep(5);
+        usleep(5000);
     }
 }
 
 int main() {
     uint8_t chassis_rx_buf[1024], rk3128_rx_buf[1024];
-    serial_t chassis_serial, rk3128_serial;
     chassis_state_t state;
-    int ret = 0;
+    char payload[128];
+    int ret, read_ret, i = 0;
     
     log_init_auto(); 
 
@@ -437,14 +465,24 @@ int main() {
     MQTTSubscribe(&mqtt_client, TOPIC_NAVIGATION, QOS1, mqtt_message_arrived);
 
     /* 重连线程 */
+    pthread_t reconnect_tid;
     pthread_create(&reconnect_tid, NULL, mqtt_reconnect_thread, NULL);
     
     /* 串口心跳线程 */
+    pthread_t keepalive_tid;
     pthread_create(&keepalive_tid, NULL, serial_keepalive_thread, &chassis_serial);
 
     /* 模拟线程 */
     pthread_t navi_tid;
     pthread_create(&navi_tid, NULL, mqtt_publish_thread, NULL);
+
+    /* 导航模块交互 */
+    pthread_t nav_recv_tid;
+    pthread_create(&nav_recv_tid, NULL, nav_recv_thread, NULL);
+
+    /* 底盘交互 */
+    pthread_t chassis_tid;
+    pthread_create(&chassis_tid, NULL, chassic_recv_thread, NULL);
 
     // // 使用默认摄像头
     // Camera cam(0);
@@ -460,74 +498,6 @@ int main() {
         MQTTYield(&mqtt_client, 1000);
         if (!MQTTIsConnected(&mqtt_client)) {
             LOGI(LOG_MODULE, "[MQTT] Connection lost after yield!\n");
-        }
-
-        int read_ret = serial_read(&chassis_serial, chassis_rx_buf, sizeof(chassis_rx_buf));
-        if (read_ret > 0) {
-            for (int i = 0; i < read_ret; i++) {
-                if (chassis_parse(chassis_rx_buf[i], &state)) {
-                    char payload[128];
-                    snprintf(payload, sizeof(payload),
-                             "{\"vel\":%d,\"ang\":%d}",
-                             state.velocity,
-                             state.angular);
-
-                    // MQTTPublish(&mqtt_client, TOPIC_STATUS, payload);
-                    // printf("Vel=%d Ang=%d\n",
-                    //        state.velocity, state.angular);
-                }
-            }
-            
-            // if (parse_check_sensors_value((char *)chassis_rx_buf, &sensor_value) == 0) {
-            //     LOGI("main", "[SERIAL] check_sensors 4th value = %d\n", sensor_value);
-            // }
-            // if (parse_base_val_value((char *)chassis_rx_buf, val_value) == 0) {
-            //     LOGI("main", "[SERIAL] base_val line_speed = %d, angular_speed = %d\n", val_value[0], val_value[1]);
-            // }
-            // if (parse_hostname_value((char *)chassis_rx_buf, sys_hostname)) {
-            //     LOGI("main", "[SERIAL] hostname = %d\n", sys_hostname);
-            // }
-
-            // printf("chassis_rx_buf = %s\n", chassis_rx_buf + 2);
-            // serial_hexdump("[SERIAL RX]", chassis_rx_buf, n);
-
-            /* Write Data to RK3128 */
-            ret = serial_write(&rk3128_serial, chassis_rx_buf, read_ret);
-            if (ret > 0)
-            {
-                LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", chassis_rx_buf, ret);
-            }
-            else
-            {
-                LOGE(LOG_MODULE, "send hostname error!\n");
-            }
-        }
-
-        /* RS232_3 */
-        read_ret = serial_read(&rk3128_serial, rk3128_rx_buf, sizeof(rk3128_rx_buf));
-        if (read_ret > 0) {
-            for (int i = 0; i < read_ret; i++) {
-                if (chassis_parse(rk3128_rx_buf[i], &state)) {
-                    char payload[128];
-                    snprintf(payload, sizeof(payload),
-                             "{\"vel\":%d,\"ang\":%d}",
-                             state.velocity,
-                             state.angular);
-                }
-            }
-
-            serial_hexdump("[RS232_3 To SERIAL RX]", rk3128_rx_buf, read_ret);
-
-            /* Write Data to RS232_2 */
-            ret = serial_write(&chassis_serial, rk3128_rx_buf, read_ret);
-            if (ret > 0)
-            {
-                LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", rk3128_rx_buf, ret);
-            }
-            else
-            {
-                LOGE(LOG_MODULE, "send hostname error!\n");
-            }
         }
 
         usleep(10000);

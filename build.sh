@@ -26,6 +26,7 @@ echo "Current directory: $(pwd)"
 
 $CXX -o $TARGET \
     $SRC_DIR/main.cpp \
+    $SRC_DIR/serial_parse.c \
     $SRC_DIR/serial_port.c \
     $SRC_DIR/chassis_protocol.c \
     $SRC_DIR/log.c \

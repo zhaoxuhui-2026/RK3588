@@ -6,8 +6,14 @@
 #include <sys/stat.h>
 #include <errno.h>
 
+#define LOG_DIR           "./"
+#define LOG_PREFIX        "rk3588_"
+#define LOG_MAX_SIZE      (50 * 1024 * 1024)  // 50MB
+#define LOG_MAX_FILES     10
+
 static FILE *log_fp = NULL;
 static int   log_level = LOG_LEVEL_INFO;
+static long log_cur_size = 0;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static const char *level_str[] = {
@@ -93,12 +99,12 @@ void log_printf(int level, const char *module,
     va_list args;
 
     /* 终端输出 */
-    printf("%s [%s] [%s] ",
-           time_buf, level_str[level], module);
-    va_start(args, fmt);
-    vprintf(fmt, args);
-    printf("\n");
-    va_end(args);
+    // printf("%s [%s] [%s] ",
+    //        time_buf, level_str[level], module);
+    // va_start(args, fmt);
+    // vprintf(fmt, args);
+    // printf("\n");
+    // va_end(args);
 
     /* 文件输出 */
     if (log_fp) {
@@ -114,96 +120,50 @@ void log_printf(int level, const char *module,
     pthread_mutex_unlock(&log_mutex);
 }
 
-
-/*
- * 功能：以 HEX + ASCII 方式打印串口帧
- * 参数：
- *   prefix : 打印前缀（如 "[SERIAL TX]"）
- *   buf    : 帧数据
- *   len    : 帧长度
- */
-// void hex_ascii_dump(const char *prefix,
-//                     const unsigned char *buf,
-//                     int len)
-// {
-//     printf("%s Len=%d\n", prefix, len);
-
-//     /* HEX */
-//     printf("HEX: ");
-//     for (int i = 0; i < len; i++) {
-//         printf("%02X ", buf[i]);
-//     }
-//     printf("\n");
-
-//     /* ASCII */
-//     printf("ASCII: ");
-//     for (int i = 0; i < len; i++) {
-//         if (isprint(buf[i])) {
-//             printf("%c ", buf[i]);
-//         } else {
-//             printf(". ");
-//         }
-//     }
-//     printf("\n");
-// }
-
-int log_init_auto(void)
+int make_log_filename(char *buf, size_t size)
 {
-    char filename[128];
-    char time_buf[32];
     struct tm tm_info;
     time_t now = time(NULL);
 
     localtime_r(&now, &tm_info);
-    strftime(time_buf, sizeof(time_buf),
-             "%Y%m%d_%H%M%S", &tm_info);
+    strftime(buf, size,
+             LOG_DIR LOG_PREFIX "%Y%m%d_%H%M%S.log",
+             &tm_info);
+    return 0;
+}
 
-    snprintf(filename, sizeof(filename),
-             "./rk3588_%s.log", time_buf);
+int log_init_auto(void)
+{
+    char name[256] = {0};
+    make_log_filename(name, sizeof(name));
 
-    log_fp = fopen(filename, "a");
+    log_fp = fopen(name, "a");
     if (!log_fp) {
         perror("log_init_auto fopen failed");
         return -1;
     }
 
+    log_cur_size = 0;
     return 0;
 }
 
-// void serial_hexdump(const char *prefix, uint8_t *buf, int len)
-// {
-//     printf("%s Len=%d\n", prefix, len);
+long file_size(FILE *fp)
+{
+    long cur = ftell(fp);
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, cur, SEEK_SET);  // 回到原位置
+    return size;
+}
 
-//     char time_buf[32];
-//     log_get_time(time_buf, sizeof(time_buf));
-
-//     // 打印 HEX 值
-//     printf("HEX:  ");
-//     for (int i = 0; i < len; i++) {
-//         printf("%02X ", buf[i]);
-//     }
-//     printf("\n");
-
-//     // 打印 ASCII 值
-//     printf("ASCII:");
-//     for (int i = 0; i < len; i++) {
-//         if (buf[i] >= 32 && buf[i] <= 126) {
-//             printf("%c", buf[i]);
-//         } else {
-//             printf(" . ");
-//         }
-//     }
-//     printf("\n");
-
-//     // 按协议字段拆分打印
-//     if (len >= 2) {
-//         printf("Frame: Header=0x%02X%02X, Length=%d, Data=", buf[0], buf[1], buf[2]);
-//         for (int i = 3; i < len - 1; i++) {
-//             printf("%c", buf[i]);
-//         }
-//         printf(", Checksum=0x%02X\n", buf[len - 1]);
-//     }
-// }
+void log_close(void)
+{
+    if (log_fp) {
+        fclose(log_fp);
+        log_fp = NULL;
+    }
+    log_cur_size = 0;
+}
 
 void serial_hexdump(const char *prefix, uint8_t *buf, int len)
 {
@@ -216,36 +176,36 @@ void serial_hexdump(const char *prefix, uint8_t *buf, int len)
     pthread_mutex_lock(&log_mutex);
 
     /* ===== 终端输出 ===== */
-    printf("%s [SERIAL] %s Len=%d\n",
-           time_buf, prefix, len);
+    // printf("%s [SERIAL] %s Len=%d\n",
+    //        time_buf, prefix, len);
 
-    /* HEX */
-    printf("HEX:  ");
-    for (int i = 0; i < len; i++) {
-        printf("%02X ", buf[i]);
-    }
-    printf("\n");
+    // /* HEX */
+    // printf("HEX:  ");
+    // for (int i = 0; i < len; i++) {
+    //     printf("%02X ", buf[i]);
+    // }
+    // printf("\n");
 
-    /* ASCII */
-    printf("ASCII:");
-    for (int i = 0; i < len; i++) {
-        if (buf[i] >= 32 && buf[i] <= 126)
-            printf(" %c ", buf[i]);
-        else
-            printf(" . ");
-    }
-    printf("\n");
+    // /* ASCII */
+    // printf("ASCII:");
+    // for (int i = 0; i < len; i++) {
+    //     if (buf[i] >= 32 && buf[i] <= 126)
+    //         printf(" %c ", buf[i]);
+    //     else
+    //         printf(" . ");
+    // }
+    // printf("\n");
 
-    /* 协议字段 */
-    if (len >= 3) {
-        printf("Frame: Header=0x%02X%02X, Length=%d, Data=",
-               buf[0], buf[1], buf[2]);
+    // /* 协议字段 */
+    // if (len >= 3) {
+    //     printf("Frame: Header=0x%02X%02X, Length=%d, Data=",
+    //            buf[0], buf[1], buf[2]);
 
-        for (int i = 3; i < len - 1; i++) {
-            printf("%c", buf[i]);
-        }
-        printf(", Checksum=0x%02X\n", buf[len - 1]);
-    }
+    //     for (int i = 3; i < len - 1; i++) {
+    //         printf("%c", buf[i]);
+    //     }
+    //     printf(", Checksum=0x%02X\n", buf[len - 1]);
+    // }
 
     /* ===== 文件输出 ===== */
     if (log_fp) {
@@ -261,7 +221,7 @@ void serial_hexdump(const char *prefix, uint8_t *buf, int len)
         fprintf(log_fp, "ASCII:");
         for (int i = 0; i < len; i++) {
             if (buf[i] >= 32 && buf[i] <= 126)
-                fprintf(log_fp, " %c ", buf[i]);
+                fprintf(log_fp, "%c", buf[i]);
             else
                 fprintf(log_fp, " . ");
         }

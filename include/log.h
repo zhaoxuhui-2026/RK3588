@@ -14,6 +14,12 @@
 int log_init(const char *filename);
 int log_init_auto(void);
 
+/* 计算日志文件大小 */
+long file_size(FILE *fp);
+
+/* 关闭日志写入 */
+void log_close(void);
+
 /* 设置最低输出等级 */
 void log_set_level(int level);
 
