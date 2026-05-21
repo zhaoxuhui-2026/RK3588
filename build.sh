@@ -43,7 +43,6 @@ $CXX -o $TARGET \
     -I$MQTT_PACKET_DIR \
     -I$OPENCV_INCLUDE \
     -L$OPENCV_LIB_DIR \
-    $OPENCV_LIBS \
     -lpthread
 
 if [ $? -ne 0 ]; then

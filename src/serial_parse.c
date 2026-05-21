@@ -2,6 +2,7 @@
 #include "log.h"
 #include <stddef.h>
 #include <ctype.h>
+#include <string.h>
 #include <cstring>
 
 #define CHASSIS_NAV_RESULT          "nav_result"
@@ -23,7 +24,7 @@ int parse_serial_cmd(const char *buf)
     }
     if (strstr(buf, CHASSIS_SYS_BOOT) != NULL)
     {
-        return CMD_NAV_RESULT;
+        return CMD_SYS_BOOT;
     }
     if (strstr(buf, CHASSIS_BASE_VEL) != NULL)
     {
@@ -35,6 +36,59 @@ int parse_serial_cmd(const char *buf)
     }
 
     return CMD_UNKNOWN;
+}
+
+bool has_digit_1_to_4(const char *field)
+{
+    if (!field) return false;
+
+    while (*field) {
+        if (*field >= '1' && *field <= '4')
+            return true;
+        field++;
+    }
+    return false;
+}
+
+const char *find_target_field(const char *str, size_t len)
+{
+    if (!str || len == 0)
+        return NULL;
+
+    /* 找 '{' */
+    const char *p = (const char *)memchr(str, '{', len);
+    if (!p || p + 1 >= str + len)
+        return NULL;
+
+    p++; // skip '{'
+
+    /* 找前两个空格 */
+    for (int space = 0; space < 2; space++) {
+        size_t remain = str + len - p;
+        p = (const char *)memchr(p, ' ', remain);
+        if (!p)
+            return NULL;
+        p++; // 跳过空格
+    }
+
+    const char *field = p;
+
+    /* 找第三个空格 */
+    size_t remain = str + len - field;
+    const char *end = (const char *)memchr(field, ' ', remain);
+    if (!end)
+        end = str + len;
+
+    static char out[64];
+    size_t flen = end - field;
+
+    if (flen >= sizeof(out))
+        flen = sizeof(out) - 1;
+
+    memcpy(out, field, flen);
+    out[flen] = '\0';
+
+    return out;
 }
 
 /*
@@ -58,6 +112,8 @@ int parse_nav_result_value(const char *buf, bool *out_ret)
     const char *prefix = "nav_result{";
     const char *pos;
     static char serial = '0';
+    bool has_digit = false;
+    size_t read_ret;
     int max_len = strlen(buf);
 
     /* 1. 查找前缀 */
@@ -71,16 +127,31 @@ int parse_nav_result_value(const char *buf, bool *out_ret)
     
     int val1, val2, val3;
     char *name = NULL;
-    int parsed = sscanf(pos, "%d %d %s",
-                        &val1, &val2, name);
+    int parsed = sscanf(pos, "%d %d ",
+                        &val1, &val2);
 
     // if (parsed < 2) {
     //     LOGE(LOG_MODULE, "[PARSE] nav_result format error\n");
     //     return -1;
     // }
+    read_ret = strlen(buf);
+    const char *field = find_target_field(buf, read_ret);
+    if (field)
+    {
+        has_digit = has_digit_1_to_4(field);
+        if (has_digit)
+        {
+            LOGI(LOG_MODULE, "has_digit_1_to_4 return true!\n");
+        }
+        else
+        {
+            LOGE(LOG_MODULE, "find target field maybe NULL or cannot find 1_to_4!\n");
+        }
+    }
 
-    LOGE(LOG_MODULE, "[PARSE] nav_result val1 = %d,  val2 = %d, name = %s, val3 = %d\n", val1, val2, name, val3);
-    if ((val1 == 3 || val1 == 1 || val3 == 0)) {
+    LOGE(LOG_MODULE, "[PARSE] nav_result val1 = %d,  val2 = %d, has_digit = %d\n", val1, val2, has_digit);
+    // if ((val1 == 3 || val1 == 1 || val3 == 0)) {
+    if (val1 == 3 && true == has_digit) {
         /* 查找字符1～4 */
         // for (int i = 0; buf[i] != '\0'; i++) {
         //     if (buf[i] >= '1' && buf[i] <= '4') {

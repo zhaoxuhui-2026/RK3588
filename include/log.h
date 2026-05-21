@@ -19,7 +19,8 @@ long file_size(FILE *fp);
 
 long long extract_timestamp(const char *name);
 
-void log_remove_oldest_by_name(void);
+/* 判断是否删除旧的日志 */
+void log_if_remove_old_file(void);
 
 long log_check_file_if_oversize(void);
 

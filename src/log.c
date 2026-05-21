@@ -10,10 +10,10 @@
 #include <limits.h>
 #include <unistd.h>
 
-#define LOG_DIR           "./"
+#define LOG_DIR           "/user_space/user/logs"
 #define LOG_PREFIX        "rk3588_"
 #define LOG_MAX_SIZE      (50 * 1024 * 1024)  // 50MB
-#define LOG_MAX_FILES     10
+#define LOG_MAX_FILES     20
 
 static FILE *log_fp = NULL;
 static int   log_level = LOG_LEVEL_INFO;
@@ -134,19 +134,24 @@ int make_log_filename(char *buf, size_t size)
 
     localtime_r(&now, &tm_info);
     strftime(buf, size,
-             LOG_DIR LOG_PREFIX "%Y%m%d_%H%M%S.log",
+             LOG_DIR "/rk3588_%Y%m%d_%H%M%S.log",
              &tm_info);
     return 0;
 }
 
 int log_init_auto(void)
 {
+    struct stat st;
+    if (stat(LOG_DIR, &st) != 0) {
+        mkdir(LOG_DIR, 0755);
+    }
     char name[256] = {0};
     make_log_filename(name, sizeof(name));
 
     log_fp = fopen(name, "a");
     if (!log_fp) {
         perror("log_init_auto fopen failed");
+        printf("log_init_auto fopen failed");
         return -1;
     }
 
@@ -156,6 +161,12 @@ int log_init_auto(void)
 
 long file_size(FILE *fp)
 {
+    if (NULL == fp)
+    {
+        LOGE(LOG_MODULE, "file size error fp NULL!");
+        return 0;
+    }
+
     long cur = ftell(fp);
     fseek(fp, 0, SEEK_END);
     long size = ftell(fp);
@@ -191,13 +202,14 @@ long long extract_timestamp(const char *name)
     return atoll(buf);  // 20260115103812
 }
 
-void log_remove_oldest_by_name(void)
+void log_if_remove_old_file(void)
 {
     DIR *dir = opendir(LOG_DIR);
     if (!dir) return;
 
     struct dirent *entry;
     char oldest_name[256] = {0};
+    int file_num = 0;
     long long oldest_ts = LLONG_MAX;
 
     while ((entry = readdir(dir)) != NULL) {
@@ -211,14 +223,13 @@ void log_remove_oldest_by_name(void)
             oldest_ts = ts;
             strcpy(oldest_name, entry->d_name);
         }
-        fprintf(log_fp, "log_remove_oldest_by_name entry->d_name = %s\n", entry->d_name);
+        file_num++;
     }
     closedir(dir);
 
-    if (oldest_name[0]) {
+    if (oldest_name[0] && file_num > LOG_MAX_FILES) {
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", LOG_DIR, oldest_name);
-        fprintf(log_fp, "log_remove_oldest_by_name path = %s, oldest_name = %s\n", path, oldest_name);
         unlink(path);
     }
 }
@@ -235,28 +246,28 @@ long log_check_file_if_oversize(void)
         DIR *dir = opendir(LOG_DIR);
         if (!dir) return 0;
         struct dirent *entry;
-        int file_num = 0;
+        // int file_num = 0;
 
-        while ((entry = readdir(dir)) != NULL) {
-            if (strncmp(entry->d_name, LOG_PREFIX, strlen(LOG_PREFIX))) {
-                continue;
-            }
-            file_num++;
-        }
+        // while ((entry = readdir(dir)) != NULL) {
+        //     if (strncmp(entry->d_name, LOG_PREFIX, strlen(LOG_PREFIX))) {
+        //         continue;
+        //     }
+        //     file_num++;
+        // }
 
-        while (1) {
-            if (file_num > LOG_MAX_FILES)
-            {
-                log_remove_oldest_by_name();
-                file_num--;
-                log_file_num = file_num;
-                fprintf(log_fp, "log_file_num = %d\n", log_file_num);
-            }
-            else
-            {
-                break;
-            }
-        }
+        // while (1) {
+        //     if (file_num > LOG_MAX_FILES)
+        //     {
+                // log_if_remove_old_file();
+        //         file_num--;
+        //         log_file_num = file_num;
+        //     }
+        //     else
+        //     {
+        //         break;
+        //     }
+        // }
+        log_if_remove_old_file();
     }
 
     return log_size;
@@ -320,7 +331,7 @@ void serial_hexdump(const char *prefix, uint8_t *buf, int len)
             if (buf[i] >= 32 && buf[i] <= 126)
                 fprintf(log_fp, "%c", buf[i]);
             else
-                fprintf(log_fp, " . ");
+                fprintf(log_fp, ".");
         }
         fprintf(log_fp, "\n");
 

@@ -50,6 +50,12 @@ bool is_nav_result = false;
 
 void mqtt_message_arrived(MessageData *md)
 {
+    if (NULL == md)
+    {
+        LOGE(LOG_MODULE, "mqtt message recive NULL!\n");
+        return;
+    }
+
     LOGI(LOG_MODULE, "[MQTT] ctrl recv: %.*s\n",
            md->message->payloadlen,
            (char *)md->message->payload);
