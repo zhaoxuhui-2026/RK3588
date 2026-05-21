@@ -77,7 +77,6 @@ int parse_serial_frame(const char *buf)
     memcpy(serial_buf, buf, 1024);
 
     cmd_type = parse_serial_cmd(serial_buf);
-    LOGI(LOG_MODULE, "[SERIAL] cmd_type = %d\n", cmd_type);
     switch (cmd_type)
     {
         case CMD_NAV_RESULT:
@@ -147,21 +146,25 @@ void *serial_keepalive_thread(void *arg)
         // }
 
         // 获取底盘hostname
-        len = build_frame(RS232_HOSTNAME_REQ, frame, sizeof(frame));
-        if (len > 0) 
+        if (strlen(sys_hostname) > 0)
         {
-            ret = serial_write(ser_232_2, frame, len);
-            if (ret > 0)
+            len = build_frame(RS232_HOSTNAME_REQ, frame, sizeof(frame));
+            if (len > 0) 
             {
-                LOGI(LOG_MODULE, "hostname = %s, ret = %d\n", RS232_HOSTNAME_REQ, ret);
+                ret = serial_write(ser_232_2, frame, len);
+                if (ret > 0)
+                {
+                    LOGI(LOG_MODULE, "hostname = %s, ret = %d\n", RS232_HOSTNAME_REQ, ret);
+                }
+                else
+                {
+                    LOGE(LOG_MODULE, "send hostname error!\n");
+                }
             }
-            else
-            {
-                LOGE(LOG_MODULE, "send hostname error!\n");
-            }
+            // serial_hexdump("[SERIAL TX]", frame, 128);
+            memset(frame, 0x00, 128);
         }
-        // serial_hexdump("[SERIAL TX]", frame, 128);
-        memset(frame, 0x00, 128);
+        
 
         // 获取导航动态参数
         // len = build_frame(RS232_UPDATE_DYNAMIC_REQ, frame, sizeof(frame));
@@ -260,7 +263,7 @@ void *nav_recv_thread(void *arg)
                 ret = serial_write(&chassis_serial, rk3128_rx_buf, read_ret);
                 if (ret > 0)
                 {
-                    LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", rk3128_rx_buf, ret);
+                    // LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", rk3128_rx_buf, ret);
                 }
                 else
                 {
@@ -328,7 +331,7 @@ void *chassic_recv_thread(void *arg)
                 ret = serial_write(&rk3128_serial, chassis_rx_buf, read_ret);
                 if (ret > 0)
                 {
-                    LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", chassis_rx_buf, ret);
+                    // LOGI(LOG_MODULE, "serial_write = %s, ret = %d\n", chassis_rx_buf, ret);
                 }
                 else
                 {

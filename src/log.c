@@ -13,7 +13,7 @@
 #define LOG_DIR           "/user_space/user/logs"
 #define LOG_PREFIX        "rk3588_"
 #define LOG_MAX_SIZE      (50 * 1024 * 1024)  // 50MB
-#define LOG_MAX_FILES     20
+#define LOG_MAX_FILES     15
 
 static FILE *log_fp = NULL;
 static int   log_level = LOG_LEVEL_INFO;
@@ -195,8 +195,13 @@ long long extract_timestamp(const char *name)
 
     /* 去掉下划线 */
     for (int i = 0; buf[i]; i++) {
-        if (buf[i] == '_')
-            buf[i] = '\0';
+        if (buf[i] == '_') 
+        {
+            // buf[i] = '\0';
+            for (int j = i; buf[j]; j++) {
+                buf[j] = buf[j+1];
+            }
+        }
     }
 
     return atoll(buf);  // 20260115103812
@@ -224,13 +229,17 @@ void log_if_remove_old_file(void)
             strcpy(oldest_name, entry->d_name);
         }
         file_num++;
+        // printf("entry->d_name = %s, oldest_name = %s, ts = %ld\n", entry->d_name, oldest_name, ts);
     }
     closedir(dir);
 
     if (oldest_name[0] && file_num > LOG_MAX_FILES) {
         char path[512];
         snprintf(path, sizeof(path), "%s/%s", LOG_DIR, oldest_name);
-        unlink(path);
+        // printf("path = %s\n", path);
+        if (unlink(path) != 0) {
+            // printf("Delete failed: %s (errno=%d)\n", strerror(errno), errno);
+        }
     }
 }
 
@@ -241,11 +250,10 @@ long log_check_file_if_oversize(void)
     if(log_size > LOG_MAX_SIZE)
     {
         log_close();
-        log_init_auto();
 
-        DIR *dir = opendir(LOG_DIR);
-        if (!dir) return 0;
-        struct dirent *entry;
+        // DIR *dir = opendir(LOG_DIR);
+        // if (!dir) return 0;
+        // struct dirent *entry;
         // int file_num = 0;
 
         // while ((entry = readdir(dir)) != NULL) {
@@ -268,6 +276,7 @@ long log_check_file_if_oversize(void)
         //     }
         // }
         log_if_remove_old_file();
+        log_init_auto();
     }
 
     return log_size;
