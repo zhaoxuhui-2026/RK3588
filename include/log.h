@@ -19,6 +19,12 @@ long file_size(FILE *fp);
 
 long long extract_timestamp(const char *name);
 
+/* 对旧日志做压缩处理 */
+int log_compress_file(const char *dir, const char *filename);
+
+/* 压缩程序启动前上一个日志 */
+void log_find_last_file(void);
+
 /* 判断是否删除旧的日志 */
 void log_if_remove_old_file(void);
 

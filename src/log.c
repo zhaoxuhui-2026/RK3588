@@ -13,13 +13,14 @@
 #define LOG_DIR           "/user_space/user/logs"
 #define LOG_PREFIX        "rk3588_"
 #define LOG_MAX_SIZE      (50 * 1024 * 1024)  // 50MB
-#define LOG_MAX_FILES     15
+#define LOG_MAX_FILES     168                 // 最多存储168份日志文件，满足存储设备一个星期以上日志量
 
 static FILE *log_fp = NULL;
 static int   log_level = LOG_LEVEL_INFO;
 static int log_file_num = 0;
 // static long log_cur_size = 0;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+char log_file_name[128] = {0};
 
 static const char *level_str[] = {
     "DEBUG", "INFO", "WARN", "ERROR"};
@@ -145,10 +146,11 @@ int log_init_auto(void)
     if (stat(LOG_DIR, &st) != 0) {
         mkdir(LOG_DIR, 0755);
     }
-    char name[256] = {0};
-    make_log_filename(name, sizeof(name));
+    // char name[256] = {0};
+    memset(log_file_name, 0, 128);
+    make_log_filename(log_file_name, sizeof(log_file_name));
 
-    log_fp = fopen(name, "a");
+    log_fp = fopen(log_file_name, "a");
     if (!log_fp) {
         perror("log_init_auto fopen failed");
         printf("log_init_auto fopen failed");
@@ -205,6 +207,25 @@ long long extract_timestamp(const char *name)
     }
 
     return atoll(buf);  // 20260115103812
+}
+
+int log_compress_file(const char *dir, const char *filename)
+{
+    char cmd[128];
+
+    /* 构造命令：gzip -f 文件名 */
+    snprintf(cmd, sizeof(cmd),
+             "cd '%s' && gzip -f '%s'",
+             dir, filename);
+
+    int ret = system(cmd);
+    if (ret == 0) {
+        printf("Compressed: %s.gz\n", filename);
+        return 0;
+    } else {
+        perror("gzip compress failed");
+        return -1;
+    }
 }
 
 void log_if_remove_old_file(void)
@@ -275,6 +296,7 @@ long log_check_file_if_oversize(void)
         //         break;
         //     }
         // }
+        log_compress_file(LOG_DIR, log_file_name);
         log_if_remove_old_file();
         log_init_auto();
     }
